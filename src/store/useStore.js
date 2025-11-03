@@ -185,6 +185,116 @@ export const useStore = create((set, get) => ({
     const model = get().aiModels.find(m => m.id === conversation.modelId);
     if (!model) return;
     
+    // Check if this is a web search command first
+    const webCmdMatch = content.trim().match(/^\s*(?:\/web|\/search)\s+(.+)/i);
+    if (webCmdMatch) {
+      const query = webCmdMatch[1].trim();
+
+      const userMessage = {
+        id: uuidv4(),
+        content,
+        sender: 'user',
+        timestamp: new Date().toISOString(),
+      };
+
+      set(state => ({
+        messages: {
+          ...state.messages,
+          [activeConversationId]: [
+            ...(state.messages[activeConversationId] || []),
+            userMessage,
+          ],
+        },
+        conversations: state.conversations.map(conv =>
+          conv.id === activeConversationId
+            ? { ...conv, lastMessage: content, timestamp: userMessage.timestamp }
+            : conv
+        ),
+      }));
+
+      // Show searching placeholder
+      const searchingMsg = {
+        id: uuidv4(),
+        content: 'Searching the web...\n',
+        sender: 'ai',
+        modelId: model.id,
+        timestamp: new Date().toISOString(),
+        isTyping: true,
+      };
+
+      set(state => ({
+        messages: {
+          ...state.messages,
+          [activeConversationId]: [
+            ...(state.messages[activeConversationId] || []),
+            searchingMsg,
+          ],
+        },
+      }));
+
+      try {
+        // Perform SearXNG search
+        const base = (apiSettings.searchUrl || '').trim();
+        if (!base) {
+          throw new Error('Search URL not configured in Settings');
+        }
+        const normalized = base.endsWith('/') ? base : base + '/';
+        const searchEndpoint = normalized + 'search?format=json&q=' + encodeURIComponent(query) + '&language=en-US&safe=1&categories=general&engines=google,bing,duckduckgo';
+        const res = await fetch(searchEndpoint, { method: 'GET' });
+        if (!res.ok) {
+          throw new Error(`Search HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        const results = Array.isArray(data.results) ? data.results : [];
+        const top = results.slice(0, 5);
+        const contextLines = top.map((r, i) => `(${i + 1}) ${r.title || r.url}\nURL: ${r.url}\n${r.content ? r.content.slice(0, 300) : ''}`).join('\n\n');
+
+        // Ask the model to answer using context, then append sources
+        if (apiSettings.provider !== 'openrouter' || !apiSettings.openrouterApiKey) {
+          throw new Error('OpenRouter not configured');
+        }
+
+        const answer = await callOpenRouterWithContext(
+          query,
+          contextLines,
+          model,
+          apiSettings.openrouterApiKey
+        );
+
+        const sourcesMd = top.map((r, i) => `- [${r.title || r.url}](${r.url})`).join('\n');
+        const finalContent = `${answer}\n\nSources:\n${sourcesMd}`;
+
+        set(state => ({
+          messages: {
+            ...state.messages,
+            [activeConversationId]: state.messages[activeConversationId].map(msg =>
+              msg.id === searchingMsg.id
+                ? { ...msg, content: finalContent, isTyping: false }
+                : msg
+            ),
+          },
+          conversations: state.conversations.map(conv =>
+            conv.id === activeConversationId
+              ? { ...conv, lastMessage: `Search: ${query}`, timestamp: new Date().toISOString() }
+              : conv
+          ),
+        }));
+      } catch (error) {
+        console.error('Web search error:', error);
+        set(state => ({
+          messages: {
+            ...state.messages,
+            [activeConversationId]: state.messages[activeConversationId].map(msg =>
+              msg.id === searchingMsg.id
+                ? { ...msg, content: `Sorry, web search failed: ${error.message || 'Unknown error'}`, isTyping: false }
+                : msg
+            ),
+          },
+        }));
+      }
+      return;
+    }
+
     // Check if this is an image generation request
     const lowerContent = content.toLowerCase();
     const hasImageCommand = lowerContent.startsWith('/img ') || lowerContent.startsWith('/image ') || lowerContent.startsWith('!img ') || lowerContent.startsWith('!image ');
@@ -667,6 +777,28 @@ async function callOpenRouter(message, model, apiKey) {
     }),
   });
   
+  const data = await response.json();
+  return data.choices[0].message.content;
+}
+
+async function callOpenRouterWithContext(message, context, model, apiKey) {
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': window.location.origin,
+      'X-Title': 'AI Messenger'
+    },
+    body: JSON.stringify({
+      model: model.apiModel || 'openai/gpt-3.5-turbo',
+      messages: [
+        { role: 'system', content: (model.systemPrompt || model.personality || 'You are a helpful assistant.') + '\nUse the provided search results as evidence. Cite sources at the end.' },
+        { role: 'system', content: `Search Results Context (may be incomplete):\n\n${context}` },
+        { role: 'user', content: message }
+      ],
+    }),
+  });
   const data = await response.json();
   return data.choices[0].message.content;
 }
