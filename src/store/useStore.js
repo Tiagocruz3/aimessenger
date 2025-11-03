@@ -188,6 +188,97 @@ export const useStore = create((set, get) => ({
     const model = get().aiModels.find(m => m.id === conversation.modelId);
     if (!model) return;
     
+    const runSearchFlow = async (query) => {
+      const trimmedQuery = query.trim();
+      if (!trimmedQuery) {
+        return;
+      }
+
+      const searchingMsg = {
+        id: uuidv4(),
+        content: 'Searching the web...\n',
+        sender: 'ai',
+        modelId: model.id,
+        timestamp: new Date().toISOString(),
+        isTyping: true,
+      };
+
+      set(state => ({
+        messages: {
+          ...state.messages,
+          [activeConversationId]: [
+            ...(state.messages[activeConversationId] || []),
+            searchingMsg,
+          ],
+        },
+      }));
+
+      try {
+        const data = await fetchSearxResults(trimmedQuery, apiSettings.searchUrl);
+        const results = Array.isArray(data.results) ? data.results : [];
+
+        if (results.length === 0) {
+          set(state => ({
+            messages: {
+              ...state.messages,
+              [activeConversationId]: state.messages[activeConversationId].map(msg =>
+                msg.id === searchingMsg.id
+                  ? { ...msg, content: `No web results found for "${trimmedQuery}".`, isTyping: false }
+                  : msg
+              ),
+            },
+          }));
+          return;
+        }
+
+        if (apiSettings.provider !== 'openrouter' || !apiSettings.openrouterApiKey) {
+          throw new Error('OpenRouter not configured. Set OpenRouter as the provider with a valid API key to enable web search summaries.');
+        }
+
+        const top = results.slice(0, 5);
+        const contextLines = top.map((r, i) => `(${i + 1}) ${r.title || r.url}\nURL: ${r.url}\n${r.content ? r.content.slice(0, 300) : ''}`).join('\n\n');
+
+        const answer = await callOpenRouterWithContext(
+          trimmedQuery,
+          contextLines,
+          model,
+          apiSettings.openrouterApiKey
+        );
+
+        const sourcesMd = top.map((r, i) => `- [${r.title || r.url}](${r.url})`).join('\n') || '_No sources returned_';
+        const finalContent = `${answer}\n\nSources:\n${sourcesMd}`;
+
+        set(state => ({
+          messages: {
+            ...state.messages,
+            [activeConversationId]: state.messages[activeConversationId].map(msg =>
+              msg.id === searchingMsg.id
+                ? { ...msg, content: finalContent, isTyping: false }
+                : msg
+            ),
+          },
+          conversations: state.conversations.map(conv =>
+            conv.id === activeConversationId
+              ? { ...conv, lastMessage: `Search: ${trimmedQuery}`, timestamp: new Date().toISOString() }
+              : conv
+          ),
+        }));
+      } catch (error) {
+        console.error('Web search error:', error);
+        const friendly = error.message || 'Unknown error';
+        set(state => ({
+          messages: {
+            ...state.messages,
+            [activeConversationId]: state.messages[activeConversationId].map(msg =>
+              msg.id === searchingMsg.id
+                ? { ...msg, content: `Sorry, web search failed: ${friendly}`, isTyping: false }
+                : msg
+            ),
+          },
+        }));
+      }
+    };
+
     // Prepare normalized content
     const lowerContent = content.toLowerCase();
     
@@ -218,86 +309,7 @@ export const useStore = create((set, get) => ({
         ),
       }));
 
-      // Show searching placeholder
-      const searchingMsg = {
-        id: uuidv4(),
-        content: 'Searching the web...\n',
-        sender: 'ai',
-        modelId: model.id,
-        timestamp: new Date().toISOString(),
-        isTyping: true,
-      };
-
-      set(state => ({
-        messages: {
-          ...state.messages,
-          [activeConversationId]: [
-            ...(state.messages[activeConversationId] || []),
-            searchingMsg,
-          ],
-        },
-      }));
-
-      try {
-        // Perform SearXNG search
-        const base = (apiSettings.searchUrl || '').trim();
-        if (!base) {
-          throw new Error('Search URL not configured in Settings');
-        }
-        const normalized = base.endsWith('/') ? base : base + '/';
-        const searchEndpoint = normalized + 'search?format=json&q=' + encodeURIComponent(query) + '&language=en-US&safe=1&categories=general&engines=google,bing,duckduckgo';
-        const res = await fetch(searchEndpoint, { method: 'GET' });
-        if (!res.ok) {
-          throw new Error(`Search HTTP ${res.status}`);
-        }
-        const data = await res.json();
-        const results = Array.isArray(data.results) ? data.results : [];
-        const top = results.slice(0, 5);
-        const contextLines = top.map((r, i) => `(${i + 1}) ${r.title || r.url}\nURL: ${r.url}\n${r.content ? r.content.slice(0, 300) : ''}`).join('\n\n');
-
-        // Ask the model to answer using context, then append sources
-        if (apiSettings.provider !== 'openrouter' || !apiSettings.openrouterApiKey) {
-          throw new Error('OpenRouter not configured');
-        }
-
-        const answer = await callOpenRouterWithContext(
-          query,
-          contextLines,
-          model,
-          apiSettings.openrouterApiKey
-        );
-
-        const sourcesMd = top.map((r, i) => `- [${r.title || r.url}](${r.url})`).join('\n');
-        const finalContent = `${answer}\n\nSources:\n${sourcesMd}`;
-
-        set(state => ({
-          messages: {
-            ...state.messages,
-            [activeConversationId]: state.messages[activeConversationId].map(msg =>
-              msg.id === searchingMsg.id
-                ? { ...msg, content: finalContent, isTyping: false }
-                : msg
-            ),
-          },
-          conversations: state.conversations.map(conv =>
-            conv.id === activeConversationId
-              ? { ...conv, lastMessage: `Search: ${query}`, timestamp: new Date().toISOString() }
-              : conv
-          ),
-        }));
-      } catch (error) {
-        console.error('Web search error:', error);
-        set(state => ({
-          messages: {
-            ...state.messages,
-            [activeConversationId]: state.messages[activeConversationId].map(msg =>
-              msg.id === searchingMsg.id
-                ? { ...msg, content: `Sorry, web search failed: ${error.message || 'Unknown error'}`, isTyping: false }
-                : msg
-            ),
-          },
-        }));
-      }
+      await runSearchFlow(query);
       return;
     }
 
@@ -327,84 +339,7 @@ export const useStore = create((set, get) => ({
             : conv
         ),
       }));
-
-      const searchingMsg = {
-        id: uuidv4(),
-        content: 'Searching the web...\n',
-        sender: 'ai',
-        modelId: model.id,
-        timestamp: new Date().toISOString(),
-        isTyping: true,
-      };
-
-      set(state => ({
-        messages: {
-          ...state.messages,
-          [activeConversationId]: [
-            ...(state.messages[activeConversationId] || []),
-            searchingMsg,
-          ],
-        },
-      }));
-
-      try {
-        const base = (apiSettings.searchUrl || '').trim();
-        if (!base) {
-          throw new Error('Search URL not configured in Settings');
-        }
-        const normalized = base.endsWith('/') ? base : base + '/';
-        const searchEndpoint = normalized + 'search?format=json&q=' + encodeURIComponent(query) + '&language=en-US&safe=1&categories=general&engines=google,bing,duckduckgo';
-        const res = await fetch(searchEndpoint, { method: 'GET' });
-        if (!res.ok) {
-          throw new Error(`Search HTTP ${res.status}`);
-        }
-        const data = await res.json();
-        const results = Array.isArray(data.results) ? data.results : [];
-        const top = results.slice(0, 5);
-        const contextLines = top.map((r, i) => `(${i + 1}) ${r.title || r.url}\nURL: ${r.url}\n${r.content ? r.content.slice(0, 300) : ''}`).join('\n\n');
-
-        if (apiSettings.provider !== 'openrouter' || !apiSettings.openrouterApiKey) {
-          throw new Error('OpenRouter not configured');
-        }
-
-        const answer = await callOpenRouterWithContext(
-          query,
-          contextLines,
-          model,
-          apiSettings.openrouterApiKey
-        );
-
-        const sourcesMd = top.map((r, i) => `- [${r.title || r.url}](${r.url})`).join('\n');
-        const finalContent = `${answer}\n\nSources:\n${sourcesMd}`;
-
-        set(state => ({
-          messages: {
-            ...state.messages,
-            [activeConversationId]: state.messages[activeConversationId].map(msg =>
-              msg.id === searchingMsg.id
-                ? { ...msg, content: finalContent, isTyping: false }
-                : msg
-            ),
-          },
-          conversations: state.conversations.map(conv =>
-            conv.id === activeConversationId
-              ? { ...conv, lastMessage: `Search: ${query}`, timestamp: new Date().toISOString() }
-              : conv
-          ),
-        }));
-      } catch (error) {
-        console.error('Web search error:', error);
-        set(state => ({
-          messages: {
-            ...state.messages,
-            [activeConversationId]: state.messages[activeConversationId].map(msg =>
-              msg.id === searchingMsg.id
-                ? { ...msg, content: `Sorry, web search failed: ${error.message || 'Unknown error'}`, isTyping: false }
-                : msg
-            ),
-          },
-        }));
-      }
+      await runSearchFlow(query);
       return;
     }
 
@@ -915,6 +850,48 @@ async function callOpenRouterWithContext(message, context, model, apiKey) {
   return data.choices[0].message.content;
 }
 
+async function fetchSearxResults(query, searchUrl) {
+  const base = (searchUrl || '').trim();
+  if (!base) {
+    throw new Error('Search URL not configured in Settings');
+  }
+
+  const normalized = base.endsWith('/') ? base : `${base}/`;
+  const searchEndpoint = `${normalized}search?format=json&q=${encodeURIComponent(query)}&language=en-US&safe=1&categories=general&engines=google,bing,duckduckgo`;
+
+  try {
+    const response = await fetch(searchEndpoint, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || `Search HTTP ${response.status}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.warn('Direct SearXNG request failed, trying proxy', error);
+    const proxyUrl = `/api/search-proxy?target=${encodeURIComponent(searchEndpoint)}`;
+    const proxyResponse = await fetch(proxyUrl, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!proxyResponse.ok) {
+      const errorData = await proxyResponse.json().catch(() => ({}));
+      throw new Error(errorData.error || `Proxy HTTP ${proxyResponse.status}`);
+    }
+
+    return await proxyResponse.json();
+  }
+}
+
 async function callN8nWebhook(message, model, webhookUrl) {
   const response = await fetch(webhookUrl, {
     method: 'POST',
@@ -969,19 +946,24 @@ async function generateImage(prompt, modelType, apiKey, useOpenAI = false) {
 
   try {
     if (useOpenAI) {
+      const openaiPayload = {
+        model: desiredModel,
+        prompt,
+        n: 1,
+        size: '1024x1024',
+      };
+
+      if (desiredModel === 'dall-e-3') {
+        openaiPayload.quality = 'hd';
+      }
+
       const response = await fetch('https://api.openai.com/v1/images/generations', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          model: desiredModel,
-          prompt,
-          n: 1,
-          size: '1024x1024',
-          quality: desiredModel === 'dall-e-3' ? 'high' : 'standard',
-        }),
+        body: JSON.stringify(openaiPayload),
       });
 
       if (!response.ok) {
