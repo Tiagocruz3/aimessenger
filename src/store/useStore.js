@@ -188,6 +188,9 @@ export const useStore = create((set, get) => ({
     const model = get().aiModels.find(m => m.id === conversation.modelId);
     if (!model) return;
     
+    // Prepare normalized content
+    const lowerContent = content.toLowerCase();
+    
     // Check if this is a web search command first
     const webCmdMatch = content.trim().match(/^\s*(?:\/web|\/search)\s+(.+)/i);
     if (webCmdMatch) {
@@ -298,8 +301,114 @@ export const useStore = create((set, get) => ({
       return;
     }
 
+    // Auto web search for time-sensitive queries
+    const autoWebRegex = /(\b(latest|news|today|current|recent|update|updates|breaking|headline|score|scores|weather|price|prices|market|trend|trending)\b|\b(did|is)\b.*\b(die|passed away|dead)\b)/i;
+    const shouldAutoWebSearch = autoWebRegex.test(lowerContent);
+    if (shouldAutoWebSearch) {
+      const query = content.trim();
+      const userMessage = {
+        id: uuidv4(),
+        content,
+        sender: 'user',
+        timestamp: new Date().toISOString(),
+      };
+
+      set(state => ({
+        messages: {
+          ...state.messages,
+          [activeConversationId]: [
+            ...(state.messages[activeConversationId] || []),
+            userMessage,
+          ],
+        },
+        conversations: state.conversations.map(conv =>
+          conv.id === activeConversationId
+            ? { ...conv, lastMessage: content, timestamp: userMessage.timestamp }
+            : conv
+        ),
+      }));
+
+      const searchingMsg = {
+        id: uuidv4(),
+        content: 'Searching the web...\n',
+        sender: 'ai',
+        modelId: model.id,
+        timestamp: new Date().toISOString(),
+        isTyping: true,
+      };
+
+      set(state => ({
+        messages: {
+          ...state.messages,
+          [activeConversationId]: [
+            ...(state.messages[activeConversationId] || []),
+            searchingMsg,
+          ],
+        },
+      }));
+
+      try {
+        const base = (apiSettings.searchUrl || '').trim();
+        if (!base) {
+          throw new Error('Search URL not configured in Settings');
+        }
+        const normalized = base.endsWith('/') ? base : base + '/';
+        const searchEndpoint = normalized + 'search?format=json&q=' + encodeURIComponent(query) + '&language=en-US&safe=1&categories=general&engines=google,bing,duckduckgo';
+        const res = await fetch(searchEndpoint, { method: 'GET' });
+        if (!res.ok) {
+          throw new Error(`Search HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        const results = Array.isArray(data.results) ? data.results : [];
+        const top = results.slice(0, 5);
+        const contextLines = top.map((r, i) => `(${i + 1}) ${r.title || r.url}\nURL: ${r.url}\n${r.content ? r.content.slice(0, 300) : ''}`).join('\n\n');
+
+        if (apiSettings.provider !== 'openrouter' || !apiSettings.openrouterApiKey) {
+          throw new Error('OpenRouter not configured');
+        }
+
+        const answer = await callOpenRouterWithContext(
+          query,
+          contextLines,
+          model,
+          apiSettings.openrouterApiKey
+        );
+
+        const sourcesMd = top.map((r, i) => `- [${r.title || r.url}](${r.url})`).join('\n');
+        const finalContent = `${answer}\n\nSources:\n${sourcesMd}`;
+
+        set(state => ({
+          messages: {
+            ...state.messages,
+            [activeConversationId]: state.messages[activeConversationId].map(msg =>
+              msg.id === searchingMsg.id
+                ? { ...msg, content: finalContent, isTyping: false }
+                : msg
+            ),
+          },
+          conversations: state.conversations.map(conv =>
+            conv.id === activeConversationId
+              ? { ...conv, lastMessage: `Search: ${query}`, timestamp: new Date().toISOString() }
+              : conv
+          ),
+        }));
+      } catch (error) {
+        console.error('Web search error:', error);
+        set(state => ({
+          messages: {
+            ...state.messages,
+            [activeConversationId]: state.messages[activeConversationId].map(msg =>
+              msg.id === searchingMsg.id
+                ? { ...msg, content: `Sorry, web search failed: ${error.message || 'Unknown error'}`, isTyping: false }
+                : msg
+            ),
+          },
+        }));
+      }
+      return;
+    }
+
     // Check if this is an image generation request
-    const lowerContent = content.toLowerCase();
     const hasImageCommand = lowerContent.startsWith('/img ') || lowerContent.startsWith('/image ') || lowerContent.startsWith('!img ') || lowerContent.startsWith('!image ');
     const imageKeywords = [
       'generate image', 'create image', 'make an image', 'draw', 'picture of', 'image of', 
