@@ -5,6 +5,79 @@ import ReactMarkdown from 'react-markdown';
 import { Copy, ThumbsUp, ThumbsDown, RotateCcw, Check } from 'lucide-react';
 import toast from 'react-hot-toast';
 
+const SearchResultsView = ({ summary, results = [], query }) => {
+  return (
+    <div className="space-y-5">
+      <div className="rounded-2xl border border-primary/30 bg-primary/10 p-4">
+        <p className="text-xs uppercase tracking-wide text-primary/80">Summary</p>
+        <p className="mt-2 text-sm text-text whitespace-pre-wrap leading-relaxed">{summary}</p>
+        {query && (
+          <p className="mt-3 text-xs text-text-secondary">
+            Query: <span className="text-text">{query}</span>
+          </p>
+        )}
+      </div>
+      {results.map((result) => {
+        const hasPreview = result.url && /^https?:\/\//i.test(result.url);
+        return (
+          <div
+            key={`${result.url}-${result.index}`}
+            className="rounded-2xl border border-border/60 bg-surface/40 p-4 shadow-sm backdrop-blur"
+          >
+            <div className="flex flex-col gap-4 md:flex-row">
+              {result.thumbnail && (
+                <div className="md:w-40 md:flex-shrink-0">
+                  <div className="overflow-hidden rounded-xl border border-border/60 bg-black/20">
+                    <img
+                      src={result.thumbnail}
+                      alt={result.title}
+                      className="h-32 w-full object-cover"
+                      loading="lazy"
+                      onError={(e) => {
+                        e.currentTarget.style.display = 'none';
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+              <div className="flex-1">
+                <a
+                  href={result.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-lg font-semibold text-sky-300 hover:text-sky-200 transition-colors"
+                >
+                  {result.index}. {result.title}
+                </a>
+                <p className="mt-1 text-xs text-emerald-400 break-all">{result.url}</p>
+                <p className="mt-2 text-sm text-text-secondary leading-relaxed whitespace-pre-line">
+                  {result.snippet}
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 h-64 overflow-hidden rounded-xl border border-border/60 bg-black/20">
+              {hasPreview ? (
+                <iframe
+                  src={result.url}
+                  title={`Preview of ${result.title}`}
+                  loading="lazy"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                  referrerPolicy="no-referrer"
+                  className="h-full w-full"
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-text-secondary">
+                  Preview unavailable for this result.
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 function Message({ message, model, onRetry }) {
   // Don't render typing messages, but show "Generating image..." messages
   if (!message) {
@@ -54,6 +127,7 @@ function Message({ message, model, onRetry }) {
   const isUser = message.sender === 'user';
   const content = message.content || '';
   const timestamp = message.timestamp ? new Date(message.timestamp) : new Date();
+  const isSearchResults = message.type === 'search_results' && Array.isArray(message.searchResults);
 
   // Safe timestamp formatting
   let timeAgo = 'just now';
@@ -124,8 +198,15 @@ function Message({ message, model, onRetry }) {
               <p className="text-sm whitespace-pre-wrap leading-relaxed">{content}</p>
             ) : (
               <div className="prose prose-invert prose-sm max-w-none">
-                <ReactMarkdown
-                  components={{
+                {isSearchResults ? (
+                  <SearchResultsView
+                    summary={content}
+                    results={message.searchResults}
+                    query={message.searchQuery}
+                  />
+                ) : (
+                  <ReactMarkdown
+                    components={{
                     // Custom code block rendering - as a card
                     code({ node, inline, className, children, ...props }) {
                       const match = /language-(\w+)/.exec(className || '');
@@ -236,9 +317,10 @@ function Message({ message, model, onRetry }) {
                       return <td className="message-table-cell">{children}</td>;
                     },
                   }}
-                >
-                  {content}
-                </ReactMarkdown>
+                  >
+                    {content}
+                  </ReactMarkdown>
+                )}
               </div>
             )}
 

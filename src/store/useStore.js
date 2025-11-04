@@ -265,24 +265,34 @@ export const useStore = create((set, get) => ({
 
         const summary = answer?.trim() || 'No summary available.';
 
-        const formattedResults = top
-          .map((r, i) => {
-            const title = r.title || r.url || `Result ${i + 1}`;
-            const url = r.url || '#';
-            const snippet = (r.content || r.description || '').trim();
-            const truncatedSnippet = snippet ? snippet.slice(0, 280) + (snippet.length > 280 ? '…' : '') : '_No preview available_';
-            return `**${i + 1}. [${title}](${url})**\n${truncatedSnippet}`;
-          })
-          .join('\n\n');
-
-        const finalContent = `**Summary**\n${summary}\n\n**Results**\n${formattedResults}`;
+        const formattedResults = top.map((r, i) => {
+          const title = r.title || r.url || `Result ${i + 1}`;
+          const url = r.url || '#';
+          const snippet = (r.content || r.description || '').trim();
+          const truncatedSnippet = snippet ? snippet.slice(0, 280) + (snippet.length > 280 ? '…' : '') : 'No preview available.';
+          const thumbnail = r.img_src || r.thumbnail || r.image || null;
+          return {
+            title,
+            url,
+            snippet: truncatedSnippet,
+            thumbnail,
+            index: i + 1,
+          };
+        });
 
         set(state => ({
           messages: {
             ...state.messages,
             [activeConversationId]: state.messages[activeConversationId].map(msg =>
               msg.id === searchingMsg.id
-                ? { ...msg, content: finalContent, isTyping: false }
+                ? { 
+                    ...msg, 
+                    content: summary,
+                    type: 'search_results',
+                    searchResults: formattedResults,
+                    searchQuery: trimmedQuery,
+                    isTyping: false 
+                  }
                 : msg
             ),
           },
@@ -300,7 +310,14 @@ export const useStore = create((set, get) => ({
             ...state.messages,
             [activeConversationId]: state.messages[activeConversationId].map(msg =>
               msg.id === searchingMsg.id
-                ? { ...msg, content: `Sorry, web search failed: ${friendly}`, isTyping: false }
+                ? { 
+                    ...msg, 
+                    content: `Sorry, web search failed: ${friendly}`, 
+                    type: undefined,
+                    searchResults: undefined,
+                    searchQuery: trimmedQuery,
+                    isTyping: false 
+                  }
                 : msg
             ),
           },
