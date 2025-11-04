@@ -2,22 +2,84 @@ import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
 import { aiModels } from '../data/aiModels';
 
+const env = import.meta.env || {};
+
+const getTrimmedEnv = (key) => {
+  const value = env?.[key];
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : '';
+};
+
+const normalizeProvider = (value) => {
+  if (typeof value !== 'string') return '';
+  const normalized = value.trim().toLowerCase();
+  return ['openrouter', 'n8n', 'lmstudio'].includes(normalized) ? normalized : '';
+};
+
+const shortenSummary = (text, maxLength = 320) => {
+  if (typeof text !== 'string') return '';
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  const sentences = normalized.match(/[^.!?]+[.!?]+/g) || [];
+  let trimmed = '';
+
+  for (const sentence of sentences) {
+    const next = (trimmed + ' ' + sentence).trim();
+    if (!trimmed && next.length > maxLength) {
+      break;
+    }
+    if (next.length > maxLength) {
+      break;
+    }
+    trimmed = next;
+  }
+
+  if (!trimmed) {
+    return normalized.slice(0, maxLength - 1).trimEnd() + '…';
+  }
+
+  return trimmed.endsWith('.') || trimmed.endsWith('!') || trimmed.endsWith('?')
+    ? trimmed
+    : `${trimmed}…`;
+};
+
+const envOpenRouterApiKey = getTrimmedEnv('VITE_OPENROUTER_API_KEY');
+const envOpenAIApiKey = getTrimmedEnv('VITE_OPENAI_API_KEY');
+const envN8nWebhookUrl = getTrimmedEnv('VITE_N8N_WEBHOOK_URL');
+const envLmstudioUrl = getTrimmedEnv('VITE_LMSTUDIO_URL');
+const envSearchUrl = getTrimmedEnv('VITE_SEARCH_URL');
+const envDefaultImageModel = getTrimmedEnv('VITE_DEFAULT_IMAGE_MODEL');
+const envDefaultOcrModel = getTrimmedEnv('VITE_DEFAULT_OCR_MODEL');
+
+const resolvedProvider =
+  normalizeProvider(env?.VITE_DEFAULT_PROVIDER) ||
+  (envOpenRouterApiKey ? 'openrouter' : '') ||
+  (envN8nWebhookUrl ? 'n8n' : '') ||
+  (envLmstudioUrl ? 'lmstudio' : '') ||
+  'openrouter';
+
+const initialApiSettings = {
+  provider: resolvedProvider,
+  openrouterApiKey: envOpenRouterApiKey,
+  openaiApiKey: envOpenAIApiKey,
+  n8nWebhookUrl: envN8nWebhookUrl,
+  lmstudioUrl: envLmstudioUrl || 'http://localhost:1234/v1',
+  searchUrl: envSearchUrl || 'https://search.brainstormnodes.org/',
+  imageGenerationModel: envDefaultImageModel || 'dall-e-3',
+  ocrModel: envDefaultOcrModel || 'gpt-4o',
+};
+
 export const useStore = create((set, get) => ({
   // State
   aiModels: [],
   conversations: [],
   activeConversationId: null,
   messages: {},
-  apiSettings: {
-    provider: 'openrouter', // openrouter, n8n, lmstudio
-    openrouterApiKey: '',
-    openaiApiKey: '', // Separate OpenAI API key for image generation
-    n8nWebhookUrl: '',
-    lmstudioUrl: 'http://localhost:1234/v1',
-    searchUrl: 'https://search.brainstormnodes.org/',
-    imageGenerationModel: 'dall-e-3', // dall-e-3, nano-banana
-    ocrModel: 'gpt-4o', // OpenAI OCR/Vision models
-  },
+  apiSettings: { ...initialApiSettings },
   openRouterModels: [],
   isLoadingModels: false,
   modelsError: null,
@@ -263,7 +325,7 @@ export const useStore = create((set, get) => ({
           apiSettings.openrouterApiKey
         );
 
-        const summary = answer?.trim() || 'No summary available.';
+        const summary = shortenSummary(answer) || 'No summary available.';
 
         const formattedResults = top.map((r, i) => {
           const title = r.title || r.url || `Result ${i + 1}`;

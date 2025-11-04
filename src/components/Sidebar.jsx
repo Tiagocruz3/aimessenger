@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Search, Plus, Bot, MessageSquarePlus } from 'lucide-react';
+import { Search, Bot, MessageSquarePlus, Trash2, AlertTriangle } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { motion, AnimatePresence } from 'framer-motion';
 import ConversationItem from './ConversationItem';
@@ -8,6 +8,7 @@ import AIModelsModal from './AIModelsModal';
 function Sidebar() {
   const [searchQuery, setSearchQuery] = useState('');
   const [showAIModelsModal, setShowAIModelsModal] = useState(false);
+  const [pendingRemoval, setPendingRemoval] = useState(null);
   const { conversations, aiModels, activeConversationId, removeConversation } = useStore();
 
   const filteredConversations = conversations.filter(conv => {
@@ -16,10 +17,24 @@ function Sidebar() {
            conv.lastMessage.toLowerCase().includes(searchQuery.toLowerCase());
   });
 
-  const handleRemoveConversation = (conversationId) => {
-    if (window.confirm('Remove this assistant conversation? This will clear all its messages.')) {
-      removeConversation(conversationId);
-    }
+  const openRemoveConversationModal = (conversation) => {
+    const model = aiModels.find(m => m.id === conversation.modelId);
+    setPendingRemoval({
+      id: conversation.id,
+      name: model?.name || 'AI Assistant',
+      avatar: model?.avatar,
+      lastMessage: conversation.lastMessage,
+    });
+  };
+
+  const closeRemoveConversationModal = () => {
+    setPendingRemoval(null);
+  };
+
+  const confirmRemoveConversation = () => {
+    if (!pendingRemoval) return;
+    removeConversation(pendingRemoval.id);
+    setPendingRemoval(null);
   };
 
   return (
@@ -66,7 +81,7 @@ function Sidebar() {
                     key={conversation.id}
                     conversation={conversation}
                     isActive={activeConversationId === conversation.id}
-                    onRemove={() => handleRemoveConversation(conversation.id)}
+                    onRemove={() => openRemoveConversationModal(conversation)}
                   />
                 ))}
               </div>
@@ -100,6 +115,64 @@ function Sidebar() {
       {showAIModelsModal && (
         <AIModelsModal onClose={() => setShowAIModelsModal(false)} />
       )}
+
+      <AnimatePresence>
+        {pendingRemoval && (
+          <motion.div
+            key="remove-conversation-modal"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+            onClick={closeRemoveConversationModal}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={(event) => event.stopPropagation()}
+              className="w-full max-w-md rounded-2xl border border-border bg-surface shadow-2xl"
+            >
+              <div className="p-6">
+                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-error/10 text-error">
+                  <AlertTriangle className="h-6 w-6" />
+                </div>
+                <h3 className="mt-4 text-lg font-semibold text-text">
+                  Remove {pendingRemoval.name}?
+                </h3>
+                <p className="mt-2 text-sm text-text-secondary">
+                  This will permanently delete the conversation history with this assistant. This action cannot be undone.
+                </p>
+
+                {pendingRemoval.lastMessage && (
+                  <div className="mt-4 rounded-lg border border-border bg-surface-light p-4 text-xs text-text-secondary">
+                    <p className="font-semibold text-text mb-1">Most recent message</p>
+                    <p className="line-clamp-3">{pendingRemoval.lastMessage}</p>
+                  </div>
+                )}
+
+                <div className="mt-6 flex items-center justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={closeRemoveConversationModal}
+                    className="rounded-lg px-4 py-2 text-sm font-medium text-text-secondary hover:text-text hover:bg-surface-light transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={confirmRemoveConversation}
+                    className="inline-flex items-center gap-2 rounded-lg bg-error px-4 py-2 text-sm font-semibold text-white hover:bg-error/90 transition-colors"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    Remove
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </>
   );
 }

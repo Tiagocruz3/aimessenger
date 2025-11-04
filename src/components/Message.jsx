@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { formatDistanceToNow } from 'date-fns';
 import ReactMarkdown from 'react-markdown';
-import { Copy, ThumbsUp, ThumbsDown, RotateCcw, Check } from 'lucide-react';
+import { Copy, ThumbsUp, ThumbsDown, RotateCcw, Check, Download, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const SearchResultsView = ({ summary, results = [], query }) => {
@@ -18,7 +18,6 @@ const SearchResultsView = ({ summary, results = [], query }) => {
         )}
       </div>
       {results.map((result) => {
-        const hasPreview = result.url && /^https?:\/\//i.test(result.url);
         return (
           <div
             key={`${result.url}-${result.index}`}
@@ -55,21 +54,10 @@ const SearchResultsView = ({ summary, results = [], query }) => {
                 </p>
               </div>
             </div>
-            <div className="mt-4 h-64 overflow-hidden rounded-xl border border-border/60 bg-black/20">
-              {hasPreview ? (
-                <iframe
-                  src={result.url}
-                  title={`Preview of ${result.title}`}
-                  loading="lazy"
-                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                  referrerPolicy="no-referrer"
-                  className="h-full w-full"
-                />
-              ) : (
-                <div className="flex h-full items-center justify-center text-sm text-text-secondary">
-                  Preview unavailable for this result.
-                </div>
-              )}
+            <div className="mt-4 rounded-xl border border-border/60 bg-black/10 p-3">
+              <p className="text-xs text-text-secondary/80">
+                Use the link above to view the site in a new tab. Many publishers block embedded previews, so we disable them here for a smoother experience.
+              </p>
             </div>
           </div>
         );
@@ -123,6 +111,7 @@ function Message({ message, model, onRetry }) {
   const [copied, setCopied] = useState(false);
   const [liked, setLiked] = useState(false);
   const [disliked, setDisliked] = useState(false);
+  const [downloadingImage, setDownloadingImage] = useState(null);
 
   const isUser = message.sender === 'user';
   const content = message.content || '';
@@ -165,6 +154,80 @@ function Message({ message, model, onRetry }) {
   const handleRetry = () => {
     if (onRetry && !isUser) {
       onRetry();
+    }
+  };
+
+  const createImageFileName = (altText = '', url = '') => {
+    const defaultName = 'generated-image.png';
+    if (altText) {
+      const slug = altText
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 40);
+      if (slug) {
+        return `${slug}.png`;
+      }
+    }
+
+    try {
+      const parsed = new URL(url);
+      const pathname = parsed.pathname.split('/').filter(Boolean).pop();
+      if (pathname) {
+        const hasExtension = /\.[a-z0-9]{2,5}$/i.test(pathname);
+        return hasExtension ? pathname : `${pathname}.png`;
+      }
+    } catch (error) {
+      // Ignore parsing errors and use default
+    }
+
+    return defaultName;
+  };
+
+  const handleImageDownload = async (url, altText) => {
+    if (!url || downloadingImage === url) {
+      return;
+    }
+
+    const fileName = createImageFileName(altText, url);
+
+    try {
+      setDownloadingImage(url);
+
+      if (url.startsWith('data:')) {
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        toast.success('Image downloaded');
+        return;
+      }
+
+      const response = await fetch(url, { mode: 'cors' });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(objectUrl);
+
+      toast.success('Image downloaded');
+    } catch (error) {
+      console.error('Image download failed:', error);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      toast.error('Direct download blocked. Opened image in a new tab.');
+    } finally {
+      setDownloadingImage(null);
     }
   };
 
@@ -247,7 +310,20 @@ function Message({ message, model, onRetry }) {
                     // Images as cards
                     img({ src, alt, ...props }) {
                       return (
-                        <div className="image-card my-4">
+                        <div className="image-card my-4 group">
+                          <button
+                            type="button"
+                            onClick={() => handleImageDownload(src, alt)}
+                            className="absolute top-3 right-3 inline-flex items-center justify-center rounded-full bg-black/70 p-2 text-white transition-colors hover:bg-black/80 focus:outline-none focus:ring-2 focus:ring-primary/70"
+                            title="Download image"
+                            disabled={downloadingImage === src}
+                          >
+                            {downloadingImage === src ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Download className="h-4 w-4" />
+                            )}
+                          </button>
                           <img
                             src={src}
                             alt={alt}
