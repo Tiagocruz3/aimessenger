@@ -165,15 +165,18 @@ function ChatWindow() {
   };
   /* Early return moved below to keep hooks order consistent across renders */
 
-  const selectedExtraModelIds = activeConversation.extraModelIds || [];
+  const selectedExtraModelIds = Array.isArray(activeConversation?.extraModelIds)
+    ? activeConversation.extraModelIds
+    : [];
   const extraModels = selectedExtraModelIds
     .map(id => aiModels.find(model => model.id === id))
     .filter(Boolean);
   const multiModeActive = extraModels.length > 0;
   const maxExtraModels = 2;
   const canAddMoreModels = selectedExtraModelIds.length < maxExtraModels;
-  const availableMultiModels = aiModels
-    .filter(model => model.id !== activeModel.id)
+  const availableMultiModels = (activeModel
+    ? aiModels.filter(model => model.id !== activeModel.id)
+    : [...aiModels])
     .sort((a, b) => {
       const aSelected = selectedExtraModelIds.includes(a.id);
       const bSelected = selectedExtraModelIds.includes(b.id);
