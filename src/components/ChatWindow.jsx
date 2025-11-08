@@ -33,6 +33,8 @@ function ChatWindow() {
     fetchOpenRouterModels,
     openRouterModels,
     apiSettings,
+    createConversation,
+    setActiveConversation,
   } = useStore();
 
   const activeConversation = conversations.find(c => c.id === activeConversationId);
@@ -762,7 +764,14 @@ function ChatWindow() {
                               <button
                                 key={model.id}
                                 onClick={() => {
-                                  // In a real app, this would switch the model for the conversation
+                              if (model.id !== activeModel.id) {
+                                const existing = conversations.find(c => c.modelId === model.id);
+                                if (existing) {
+                                  setActiveConversation(existing.id);
+                                } else {
+                                  createConversation(model.id);
+                                }
+                              }
                                   setShowModelDropdown(false);
                                 }}
                                 className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-surface-light transition-colors ${
