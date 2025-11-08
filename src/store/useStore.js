@@ -1206,6 +1206,98 @@ export const useStore = create((set, get) => ({
       }));
     }
   },
+
+  // OCR: analyze an uploaded image using the configured OCR model (OpenRouter-based)
+  analyzeDocument: async (file) => {
+    const { activeConversationId, conversations, apiSettings } = get();
+    if (!activeConversationId || !file) return;
+    const conversation = conversations.find(c => c.id === activeConversationId);
+    if (!conversation) return;
+    const model = get().aiModels.find(m => m.id === conversation.modelId);
+    if (!model) return;
+
+    if (!apiSettings.openrouterApiKey) {
+      // Surface an AI message explaining configuration needed
+      const errorMsg = {
+        id: uuidv4(),
+        content: 'OCR is not configured. Please set your OpenRouter API key in Settings > OCR Model.',
+        sender: 'ai',
+        modelId: model.id,
+        timestamp: new Date().toISOString(),
+        isTyping: false,
+      };
+      set(state => ({
+        messages: {
+          ...state.messages,
+          [activeConversationId]: [
+            ...(state.messages[activeConversationId] || []),
+            errorMsg,
+          ],
+        },
+      }));
+      return;
+    }
+
+    const userMsg = {
+      id: uuidv4(),
+      content: `Uploaded image for OCR: ${file.name}`,
+      sender: 'user',
+      timestamp: new Date().toISOString(),
+    };
+    const aiTyping = {
+      id: uuidv4(),
+      content: 'Analyzing the document...',
+      sender: 'ai',
+      modelId: model.id,
+      timestamp: new Date().toISOString(),
+      isTyping: true,
+    };
+
+    set(state => ({
+      messages: {
+        ...state.messages,
+        [activeConversationId]: [
+          ...(state.messages[activeConversationId] || []),
+          userMsg,
+          aiTyping,
+        ],
+      },
+      conversations: state.conversations.map(conv =>
+        conv.id === activeConversationId
+          ? { ...conv, lastMessage: userMsg.content, timestamp: userMsg.timestamp }
+          : conv
+      ),
+    }));
+
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      const ocrModel = get().apiSettings.ocrModel || 'gpt-4o';
+      const result = await callOpenRouterVision(dataUrl, ocrModel, get().apiSettings.openrouterApiKey);
+      set(state => ({
+        messages: {
+          ...state.messages,
+          [activeConversationId]: state.messages[activeConversationId].map(msg =>
+            msg.id === aiTyping.id ? { ...msg, content: result, isTyping: false } : msg
+          ),
+        },
+        conversations: state.conversations.map(conv =>
+          conv.id === activeConversationId
+            ? { ...conv, lastMessage: result, timestamp: new Date().toISOString() }
+            : conv
+        ),
+      }));
+    } catch (error) {
+      const friendly = error?.message || 'OCR failed. Please try another image.';
+      set(state => ({
+        messages: {
+          ...state.messages,
+          [activeConversationId]: state.messages[activeConversationId].map(msg =>
+            msg.id === aiTyping.id ? { ...msg, content: friendly, isTyping: false } : msg
+          ),
+        },
+      }));
+    }
+  },
 }));
 
 // API Helper Functions
@@ -1403,6 +1495,54 @@ function formatUserProfileAsSystemContext(profile) {
     `Use the user's name when addressing them naturally.`
   ].filter(Boolean);
   return lines.join('\n');
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    try {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = (e) => reject(new Error('Failed to read file'));
+      reader.readAsDataURL(file);
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+async function callOpenRouterVision(imageDataUrl, modelId, apiKey) {
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': window.location.origin,
+      'X-Title': 'AI Messenger'
+    },
+    body: JSON.stringify({
+      model: modelId || 'gpt-4o',
+      messages: [
+        {
+          role: 'system',
+          content: 'You are an OCR assistant. Extract readable text from the provided image and provide a concise summary. If relevant, list key fields found.'
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Extract text and summarize the document briefly.' },
+            { type: 'image_url', image_url: imageDataUrl }
+          ]
+        }
+      ]
+    }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error?.message || `OpenRouter vision failed (HTTP ${response.status})`);
+  }
+  const content = data?.choices?.[0]?.message?.content;
+  if (!content) throw new Error('No OCR content returned');
+  return content;
 }
 
 // Image Generation Function

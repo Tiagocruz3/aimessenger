@@ -35,6 +35,7 @@ function ChatWindow() {
     apiSettings,
     createConversation,
     setActiveConversation,
+    analyzeDocument,
   } = useStore();
 
   const activeConversation = conversations.find(c => c.id === activeConversationId);
@@ -724,10 +725,28 @@ function ChatWindow() {
             <div className="max-w-3xl mx-auto">
               <div className="relative flex items-center gap-2 bg-surface-light rounded-full px-2 py-1 border border-border/50">
                 {/* Left Icons */}
-                <div className="flex items-center gap-1">
-                  <button className="p-2 hover:bg-surface rounded-full transition-colors">
-                    <Plus className="w-5 h-5 text-text-secondary" />
-                  </button>
+            <div className="flex items-center gap-1">
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                className="hidden"
+                id="ocr-file-input"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    analyzeDocument(file);
+                    // reset input so selecting the same file again retriggers
+                    e.target.value = '';
+                  }
+                }}
+              />
+              <button
+                className="p-2 hover:bg-surface rounded-full transition-colors"
+                title="Upload image for OCR analysis"
+                onClick={() => document.getElementById('ocr-file-input')?.click()}
+              >
+                <Plus className="w-5 h-5 text-text-secondary" />
+              </button>
                   <button className="p-2 hover:bg-surface rounded-full transition-colors">
                     <Sliders className="w-5 h-5 text-text-secondary" />
                   </button>
