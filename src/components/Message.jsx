@@ -135,12 +135,18 @@ const ImageSearchResultsView = ({ heading, results = [], query }) => {
 };
 
 function Message({ message, model, onRetry, showModelLabel = false, isGrouped = false }) {
-  // Don't render typing messages, but show "Generating image..." messages
+  // Hooks must be called unconditionally at the top-level on every render
+  const [copied, setCopied] = useState(false);
+  const [liked, setLiked] = useState(false);
+  const [disliked, setDisliked] = useState(false);
+  const [downloadingImage, setDownloadingImage] = useState(null);
+
+  // Validate message after hooks to keep hooks order stable across renders
   if (!message) {
     return null;
   }
-  
-  // Show generating image message
+
+  // Show generating image message (before regular rendering)
   if (message.isGeneratingImage) {
     return (
       <motion.div
@@ -170,16 +176,11 @@ function Message({ message, model, onRetry, showModelLabel = false, isGrouped = 
       </motion.div>
     );
   }
-  
+
   // Don't render typing messages or invalid messages
   if (message.isTyping || !message.content) {
     return null;
   }
-
-  const [copied, setCopied] = useState(false);
-  const [liked, setLiked] = useState(false);
-  const [disliked, setDisliked] = useState(false);
-  const [downloadingImage, setDownloadingImage] = useState(null);
 
   const isUser = message.sender === 'user';
   const content = message.content || '';
