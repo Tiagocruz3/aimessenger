@@ -930,27 +930,36 @@ export const useStore = create((set, get) => ({
         const effectiveProvider = (targetModel.provider || apiSettings.provider || '').toLowerCase();
         let response = '';
 
+        // Build last 20-message history (user/assistant only, no typing)
+        const rawHistory = (get().messages[activeConversationId] || [])
+          .filter(m => !m.isTyping && typeof m.content === 'string' && m.content.trim().length > 0)
+          .slice(-20)
+          .map(m => ({
+            role: m.sender === 'user' ? 'user' : 'assistant',
+            content: m.content,
+          }));
+
         if (effectiveProvider === 'openrouter') {
           if (!apiSettings.openrouterApiKey) {
             throw new Error('OpenRouter API key not configured');
           }
-          response = await callOpenRouter(content, targetModel, apiSettings.openrouterApiKey, userProfileContext);
+          response = await callOpenRouter(content, targetModel, apiSettings.openrouterApiKey, userProfileContext, rawHistory);
         } else if (effectiveProvider === 'n8n') {
           if (!apiSettings.n8nWebhookUrl) {
             throw new Error('n8n webhook URL not configured');
           }
-          response = await callN8nWebhook(content, targetModel, apiSettings.n8nWebhookUrl, userProfile);
+          response = await callN8nWebhook(content, targetModel, apiSettings.n8nWebhookUrl, userProfile, rawHistory);
         } else if (effectiveProvider === 'lmstudio') {
           if (!apiSettings.lmstudioUrl) {
             throw new Error('LM Studio URL not configured');
           }
-          response = await callLMStudio(content, targetModel, apiSettings.lmstudioUrl, userProfileContext);
+          response = await callLMStudio(content, targetModel, apiSettings.lmstudioUrl, userProfileContext, rawHistory);
         } else if (apiSettings.provider === 'openrouter' && apiSettings.openrouterApiKey) {
-          response = await callOpenRouter(content, targetModel, apiSettings.openrouterApiKey, userProfileContext);
+          response = await callOpenRouter(content, targetModel, apiSettings.openrouterApiKey, userProfileContext, rawHistory);
         } else if (apiSettings.provider === 'n8n' && apiSettings.n8nWebhookUrl) {
-          response = await callN8nWebhook(content, targetModel, apiSettings.n8nWebhookUrl, userProfile);
+          response = await callN8nWebhook(content, targetModel, apiSettings.n8nWebhookUrl, userProfile, rawHistory);
         } else if (apiSettings.provider === 'lmstudio' && apiSettings.lmstudioUrl) {
-          response = await callLMStudio(content, targetModel, apiSettings.lmstudioUrl, userProfileContext);
+          response = await callLMStudio(content, targetModel, apiSettings.lmstudioUrl, userProfileContext, rawHistory);
         } else {
           response = generateMockResponse(content, targetModel);
         }
@@ -1301,7 +1310,7 @@ export const useStore = create((set, get) => ({
 }));
 
 // API Helper Functions
-async function callOpenRouter(message, model, apiKey, userProfileContext) {
+async function callOpenRouter(message, model, apiKey, userProfileContext, history) {
   const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -1315,6 +1324,7 @@ async function callOpenRouter(message, model, apiKey, userProfileContext) {
       messages: [
         { role: 'system', content: model.systemPrompt || model.personality },
         ...(userProfileContext ? [{ role: 'system', content: userProfileContext }] : []),
+        ...Array.isArray(history) ? history : [],
         { role: 'user', content: message }
       ],
     }),
@@ -1441,6 +1451,9 @@ async function callN8nWebhook(message, model, webhookUrl, userProfile) {
       model: model.name,
       personality: model.personality,
       userProfile,
+      // Provide history to webhook; implement handling on the n8n side as needed
+      // The history format: [{ role: 'user'|'assistant', content: string }]
+      history: Array.isArray(arguments[4]) ? arguments[4] : undefined,
     }),
   });
   
@@ -1448,7 +1461,7 @@ async function callN8nWebhook(message, model, webhookUrl, userProfile) {
   return data.response || data.message || 'No response from webhook';
 }
 
-async function callLMStudio(message, model, baseUrl, userProfileContext) {
+async function callLMStudio(message, model, baseUrl, userProfileContext, history) {
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -1458,6 +1471,7 @@ async function callLMStudio(message, model, baseUrl, userProfileContext) {
       messages: [
         { role: 'system', content: model.systemPrompt || model.personality },
         ...(userProfileContext ? [{ role: 'system', content: userProfileContext }] : []),
+        ...Array.isArray(history) ? history : [],
         { role: 'user', content: message }
       ],
       temperature: 0.7,
