@@ -338,7 +338,7 @@ function Message({ message, model, onRetry, showModelLabel = false, isGrouped = 
       : 'max-w-[85%] min-w-0';
   const bubbleClass = `${
     isUser 
-      ? 'bg-primary text-white px-4 py-3 shadow-sm' 
+      ? 'bg-surface px-5 py-4 shadow-sm border border-border/60' 
       : 'bg-surface-light px-5 py-4 shadow-sm'
   } ${isGrouped ? 'flex-1 flex flex-col h-full' : ''}`;
 

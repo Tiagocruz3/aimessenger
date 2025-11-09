@@ -1249,7 +1249,7 @@ export const useStore = create((set, get) => ({
 
     const userMsg = {
       id: uuidv4(),
-      content: `Uploaded image for OCR: ${file.name}`,
+      content: `Uploaded ${file.type === 'application/pdf' ? 'PDF document' : 'image'} for OCR: ${file.name}`,
       sender: 'user',
       timestamp: new Date().toISOString(),
     };
@@ -1279,9 +1279,29 @@ export const useStore = create((set, get) => ({
     }));
 
     try {
-      const dataUrl = await fileToDataUrl(file);
-      const ocrModel = get().apiSettings.ocrModel || 'gpt-4o';
-      const result = await callOpenRouterVision(dataUrl, ocrModel, get().apiSettings.openrouterApiKey);
+      let result = '';
+      if (file.type === 'application/pdf') {
+        // Extract text from PDF and summarize with OpenRouter
+        const extracted = await extractTextFromPdf(file, 10); // first up to 10 pages
+        const prompt = [
+          'Extract the key text from the following PDF and provide:',
+          '1) A concise summary',
+          '2) Key fields or bullet points',
+          '3) Notable dates, names, or amounts',
+          '',
+          'PDF Extracted Text:',
+          '---',
+          extracted.slice(0, 12000),
+          '---',
+        ].join('\n');
+        const openRouterModel = { apiModel: 'openai/gpt-4o' };
+        result = await callOpenRouter(prompt, openRouterModel, get().apiSettings.openrouterApiKey, null, []);
+      } else {
+        // Image OCR with vision
+        const dataUrl = await fileToDataUrl(file);
+        const ocrModel = get().apiSettings.ocrModel || 'gpt-4o';
+        result = await callOpenRouterVision(dataUrl, ocrModel, get().apiSettings.openrouterApiKey);
+      }
       set(state => ({
         messages: {
           ...state.messages,
@@ -1557,6 +1577,29 @@ async function callOpenRouterVision(imageDataUrl, modelId, apiKey) {
   const content = data?.choices?.[0]?.message?.content;
   if (!content) throw new Error('No OCR content returned');
   return content;
+}
+
+async function extractTextFromPdf(file, maxPages = 10) {
+  // Lazy-load pdf.js from CDN worker to avoid bundling issues
+  const { getDocument, GlobalWorkerOptions } = await import('pdfjs-dist/build/pdf');
+  GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  const arrayBuffer = await new Response(file).arrayBuffer();
+  const uint8 = new Uint8Array(arrayBuffer);
+  const pdf = await getDocument({ data: uint8 }).promise;
+  const total = Math.min(pdf.numPages, Math.max(1, maxPages));
+  let fullText = '';
+
+  for (let i = 1; i <= total; i += 1) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const strings = (content.items || []).map(item => item.str || '').filter(Boolean);
+    const pageText = strings.join(' ').replace(/\s+/g, ' ').trim();
+    if (pageText) {
+      fullText += `\n\n[Page ${i}]\n${pageText}`;
+    }
+  }
+  return fullText.trim();
 }
 
 // Image Generation Function

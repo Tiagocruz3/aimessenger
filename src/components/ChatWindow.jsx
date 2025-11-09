@@ -728,7 +728,7 @@ function ChatWindow() {
             <div className="flex items-center gap-1">
               <input
                 type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
+                accept="image/png,image/jpeg,image/webp,image/gif,application/pdf"
                 className="hidden"
                 id="ocr-file-input"
                 onChange={(e) => {
